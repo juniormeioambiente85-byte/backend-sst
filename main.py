@@ -7,7 +7,7 @@ import os
 import pymupdf  # PyMuPDF
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins="*", allow_headers="*", methods=["GET", "POST", "OPTIONS"])
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
