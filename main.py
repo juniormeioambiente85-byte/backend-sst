@@ -17,7 +17,13 @@ def add_cors_headers(response):
     response.headers["Access-Control-Max-Age"] = "600"
     return response
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+_client = None
+
+def get_client():
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    return _client
 
 TIN_PROMPT = """Voce atuara como Auditor Tecnico de Seguranca do Trabalho, com base na legislacao brasileira (NR-01, NR-07, NR-06) e boas praticas de Sistema de Gestao (ISO 45001).
 
@@ -143,7 +149,7 @@ A seguir estao os documentos para analise:"""})
 
         content.append({"type": "text", "text": f"\nRetorne SOMENTE este JSON valido, sem texto adicional:\n{schema}"})
 
-        response = client.messages.create(
+        response = get_client().messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4000,
             messages=[{"role": "user", "content": content}]
