@@ -140,7 +140,7 @@ A seguir estao os documentos para analise:"""})
         content.append({"type": "text", "text": f"\nRetorne SOMENTE este JSON valido, sem texto adicional:\n{schema}"})
 
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             max_tokens=4000,
             messages=[{"role": "user", "content": content}]
         )
