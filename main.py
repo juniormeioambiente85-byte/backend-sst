@@ -9,6 +9,14 @@ import pymupdf
 app = Flask(__name__)
 CORS(app, origins="*", allow_headers="*", methods=["GET", "POST", "OPTIONS"])
 
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Max-Age"] = "600"
+    return response
+
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
 TIN_PROMPT = """Voce atuara como Auditor Tecnico de Seguranca do Trabalho, com base na legislacao brasileira (NR-01, NR-07, NR-06) e boas praticas de Sistema de Gestao (ISO 45001).
@@ -87,9 +95,6 @@ def health():
 
 @app.route("/analisar", methods=["POST", "OPTIONS"])
 def analisar():
-    if request.method == "OPTIONS":
-        return jsonify({"status": "ok"}), 200
-
     try:
         razao       = request.form.get("razao", "")
         cnpj        = request.form.get("cnpj", "")
@@ -128,7 +133,6 @@ A seguir estao os documentos para analise:"""})
                     label = {"aso":"ASO","os":"Ordem de Servico","epi":"Ficha de EPI","trein":"Treinamento"}[doc_type]
                     content.extend(extract_pdf_content(f.read(), f"{colab.get('name','Colaborador')} - {label}"))
 
-        # Build JSON schema based on what was sent
         pgr_schema = '''"pgr":{"status":"ok|pendente|reprovado|ausente","validade":"DD/MM/AAAA ou N/A","obs":"string","etapas":[{"num":1,"nome":"Dados da empresa","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"trecho real","analise":"avaliacao"},{"num":2,"nome":"Inventario de Riscos","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":3,"nome":"Plano de Acao","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":4,"nome":"Responsavel Tecnico","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":5,"nome":"Vigencia","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"}]}''' if has_pgr else '''"pgr":{"status":"ausente","validade":"N/A","obs":"Documento nao enviado","etapas":[]}'''
 
         pcmso_schema = '''"pcmso":{"status":"ok|pendente|reprovado|ausente","validade":"DD/MM/AAAA ou N/A","obs":"string","etapas":[{"num":6,"nome":"Dados da empresa","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":7,"nome":"Medico Responsavel","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":8,"nome":"Vigencia","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":9,"nome":"Compatibilidade com PGR","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":10,"nome":"Compatibilidade de Riscos","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":11,"nome":"Exames Ocupacionais","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"}]}''' if has_pcmso else '''"pcmso":{"status":"ausente","validade":"N/A","obs":"Documento nao enviado","etapas":[]}'''
@@ -140,7 +144,7 @@ A seguir estao os documentos para analise:"""})
         content.append({"type": "text", "text": f"\nRetorne SOMENTE este JSON valido, sem texto adicional:\n{schema}"})
 
         response = client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-sonnet-4-20250514",
             max_tokens=4000,
             messages=[{"role": "user", "content": content}]
         )
