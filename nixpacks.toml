@@ -1,2 +1,5 @@
 [variables]
 NIXPACKS_PYTHON_VERSION = "3.12"
+
+[start]
+cmd = "gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120 --log-level debug"
