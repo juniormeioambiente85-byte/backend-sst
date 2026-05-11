@@ -4,18 +4,19 @@ import json
 import fitz  # PyMuPDF
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import anthropic
+import google.generativeai as genai
 
 app = Flask(__name__)
 CORS(app, origins="*", allow_headers="*", methods=["GET", "POST", "OPTIONS"])
 
-_client = None
+_model = None
 
-def get_client():
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    return _client
+def get_model():
+    global _model
+    if _model is None:
+        genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+        _model = genai.GenerativeModel("gemini-1.5-flash")
+    return _model
 
 
 def extrair_conteudo_pdf(file_bytes):
@@ -63,12 +64,12 @@ DOCUMENTOS RECEBIDOS PARA ANÁLISE:
     if "pgr" in documentos_texto and documentos_texto["pgr"]:
         prompt += f"\n--- CONTEÚDO DO PGR ---\n{documentos_texto['pgr'][:15000]}\n"
     elif "pgr" in documentos_imagens and documentos_imagens["pgr"]:
-        prompt += "\n[PGR enviado como documento escaneado — analise as imagens anexadas]\n"
+        prompt += "\n[PGR enviado como documento escaneado]\n"
 
     if "pcmso" in documentos_texto and documentos_texto["pcmso"]:
         prompt += f"\n--- CONTEÚDO DO PCMSO ---\n{documentos_texto['pcmso'][:15000]}\n"
     elif "pcmso" in documentos_imagens and documentos_imagens["pcmso"]:
-        prompt += "\n[PCMSO enviado como documento escaneado — analise as imagens anexadas]\n"
+        prompt += "\n[PCMSO enviado como documento escaneado]\n"
 
     if colaboradores:
         prompt += "\n--- COLABORADORES E ASOs ---\n"
@@ -115,18 +116,18 @@ CONCLUSÃO: Apresente uma tabela com o resumo de todas as etapas analisadas (apr
 
 Ao final, gere um e-mail formal em português com o resultado para enviar ao fornecedor.
 
-Retorne a resposta em JSON com esta estrutura:
+Retorne a resposta APENAS em JSON válido com esta estrutura (sem markdown, sem ```json):
 {
-  "status_geral": "APROVADO" | "REPROVADO" | "PARCIALMENTE APROVADO",
+  "status_geral": "APROVADO",
   "analises": [
     {
-      "documento": "PGR" | "PCMSO" | "ASO - [Nome do colaborador]",
-      "status": "APROVADO" | "REPROVADO",
+      "documento": "PGR",
+      "status": "APROVADO",
       "etapas": [
         {
           "numero": 1,
           "nome": "Dados da empresa",
-          "status": "✅ APROVADO" | "❌ REPROVADO",
+          "status": "✅ APROVADO",
           "evidencia": "...",
           "analise_tecnica": "..."
         }
@@ -143,7 +144,7 @@ Retorne a resposta em JSON com esta estrutura:
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "message": "Backend SST funcionando"})
+    return jsonify({"status": "ok", "message": "Backend SST funcionando com Gemini"})
 
 
 @app.route("/analisar", methods=["POST", "OPTIONS"])
@@ -152,7 +153,6 @@ def analisar():
         return jsonify({"ok": True}), 200
 
     try:
-        # Dados da empresa
         dados_empresa = {
             "razaoSocial": request.form.get("razaoSocial", ""),
             "cnpj": request.form.get("cnpj", ""),
@@ -160,7 +160,6 @@ def analisar():
             "email": request.form.get("email", ""),
         }
 
-        # Colaboradores
         colaboradores_json = request.form.get("colaboradores", "[]")
         try:
             colaboradores = json.loads(colaboradores_json)
@@ -169,7 +168,7 @@ def analisar():
 
         documentos_texto = {}
         documentos_imagens = {}
-        content_blocks = []
+        parts = []
 
         # Processar PGR
         if "pgr" in request.files:
@@ -181,9 +180,11 @@ def analisar():
             elif imagens:
                 documentos_imagens["pgr"] = imagens
                 for img_b64 in imagens[:5]:
-                    content_blocks.append({
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": img_b64
+                        }
                     })
 
         # Processar PCMSO
@@ -196,12 +197,14 @@ def analisar():
             elif imagens:
                 documentos_imagens["pcmso"] = imagens
                 for img_b64 in imagens[:5]:
-                    content_blocks.append({
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": img_b64
+                        }
                     })
 
-        # Processar ASOs dos colaboradores
+        # Processar ASOs
         for i, colab in enumerate(colaboradores):
             chave = f"aso_{i}"
             if chave in request.files:
@@ -213,30 +216,24 @@ def analisar():
                 elif imagens:
                     documentos_imagens[chave] = imagens
                     for img_b64 in imagens[:3]:
-                        content_blocks.append({
-                            "type": "image",
-                            "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}
+                        parts.append({
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": img_b64
+                            }
                         })
 
-        # Montar prompt
         prompt_texto = montar_prompt(
             dados_empresa, colaboradores, documentos_texto, documentos_imagens
         )
 
-        # Montar mensagem para Claude
-        content_blocks.append({"type": "text", "text": prompt_texto})
+        parts.append(prompt_texto)
 
-        # Chamar API Claude
-        client = get_client()
-        response = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=8000,
-            messages=[{"role": "user", "content": content_blocks}]
-        )
+        model = get_model()
+        response = model.generate_content(parts)
+        texto_resposta = response.text
 
-        texto_resposta = response.content[0].text
-
-        # Tentar extrair JSON da resposta
+        # Extrair JSON da resposta
         try:
             inicio = texto_resposta.find("{")
             fim = texto_resposta.rfind("}") + 1
