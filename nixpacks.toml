@@ -1,5 +1,2 @@
 [variables]
-NIXPACKS_PYTHON_VERSION = "3.12"
-
-[start]
-cmd = "gunicorn main:app -c gunicorn.conf.py"
+PYTHON_VERSION = "3.12"
