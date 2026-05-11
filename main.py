@@ -1,21 +1,13 @@
+import os
+import base64
+import json
+import fitz  # PyMuPDF
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import anthropic
-import base64
-import os
-import json
-import pymupdf
 
 app = Flask(__name__)
 CORS(app, origins="*", allow_headers="*", methods=["GET", "POST", "OPTIONS"])
-
-@app.after_request
-def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    response.headers["Access-Control-Max-Age"] = "600"
-    return response
 
 _client = None
 
@@ -25,150 +17,242 @@ def get_client():
         _client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
     return _client
 
-TIN_PROMPT = """Voce atuara como Auditor Tecnico de Seguranca do Trabalho, com base na legislacao brasileira (NR-01, NR-07, NR-06) e boas praticas de Sistema de Gestao (ISO 45001).
 
-REGRAS OBRIGATORIAS:
-- Basear-se EXCLUSIVAMENTE no conteudo real dos documentos fornecidos.
-- NAO presumir informacoes. NAO completar dados ausentes.
-- Realizar analise critica: avaliar coerencia, consistencia e conformidade.
-- Para cada etapa: Status (APROVADO/REPROVADO/AUSENTE), Evidencia (trecho real do documento) e Analise Tecnica objetiva.
-- Analisar SOMENTE os documentos enviados. Documentos nao enviados = etapas AUSENTE.
+def extrair_conteudo_pdf(file_bytes):
+    """Extrai texto ou imagens de um PDF."""
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    texto_total = ""
+    imagens = []
 
-CRITERIOS DE ANALISE - PGR (etapas 1 a 5):
-Etapa 1 - Dados da empresa: verificar Razao Social e CNPJ presentes.
-Etapa 2 - Inventario de Riscos: buscar Inventario de Perigos e Riscos ou equivalente.
-Etapa 3 - Plano de Acao: verificar existencia de plano de acao.
-Etapa 4 - Responsavel Tecnico: nome + assinatura + registro profissional (CREA/MTE) + tipo de assinatura.
-Etapa 5 - Vigencia: deve conter vigencia definida de ate 2 anos.
+    for page in doc:
+        texto = page.get_text()
+        texto_total += texto
 
-CRITERIOS DE ANALISE - PCMSO (etapas 6 a 11):
-Etapa 6 - Dados da empresa: Razao Social e CNPJ.
-Etapa 7 - Medico Responsavel: nome + CRM + assinatura.
-Etapa 8 - Vigencia: 12 meses com data explicita de inicio e fim.
-Etapa 9 - Compatibilidade com PGR: todas as funcoes do PGR devem estar no PCMSO.
-Etapa 10 - Compatibilidade de Riscos: riscos identicos ao PGR.
-Etapa 11 - Exames Ocupacionais: tipos e periodicidade definida.
-
-CRITERIOS DE ANALISE - ASO (etapas 12 a 23 por colaborador):
-Etapa 12 - Dados do trabalhador: nome completo + CPF.
-Etapa 13 - Dados da empresa: Razao Social + CNPJ.
-Etapa 14 - Compatibilidade com PCMSO: funcao presente no PCMSO.
-Etapa 15 - Setor: deve coincidir com PCMSO.
-Etapa 16 - Tipo de exame: admissional/periodico/retorno/mudanca de funcao.
-Etapa 17 - Riscos Ocupacionais: devem ser identicos ao PCMSO.
-Etapa 18 - Data do exame: formato valido (DD/MM/AAAA).
-Etapa 19 - Coerencia com PCMSO: tipo de exame compativel com planejamento.
-Etapa 20 - Resultado: APTO ou INAPTO.
-Etapa 21 - Medico Responsavel: nome + CRM.
-Etapa 22 - Assinatura do trabalhador: presente.
-Etapa 23 - Assinatura do medico: presente + CRM."""
-
-
-def extract_pdf_content(pdf_bytes, filename):
-    try:
-        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-        full_text = ""
+    # Se o PDF tem pouco texto, é escaneado — extrair como imagens
+    if len(texto_total.strip()) < 100:
         for page in doc:
-            full_text += page.get_text() + "\n"
+            pix = page.get_pixmap(dpi=150)
+            img_bytes = pix.tobytes("jpeg")
+            b64 = base64.b64encode(img_bytes).decode("utf-8")
+            imagens.append(b64)
 
-        if len(full_text.replace(" ", "").replace("\n", "")) > 200:
-            doc.close()
-            return [{"type": "text", "text": f"=== DOCUMENTO: {filename} ===\n{full_text[:15000]}"}]
+    doc.close()
+    return texto_total.strip(), imagens
 
-        content_blocks = [{"type": "text", "text": f"=== DOCUMENTO ESCANEADO: {filename} ==="}]
-        for i, page in enumerate(doc):
-            mat = pymupdf.Matrix(1.5, 1.5)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            img_bytes = pix.tobytes("jpeg", jpg_quality=75)
-            img_b64 = base64.b64encode(img_bytes).decode()
-            content_blocks.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}
-            })
-            content_blocks.append({"type": "text", "text": f"[Pagina {i+1} de {len(doc)}]"})
 
-        doc.close()
-        return content_blocks
+def montar_prompt(dados_empresa, colaboradores, documentos_texto, documentos_imagens):
+    """Monta o prompt completo com o TIN integrado."""
 
-    except Exception as e:
-        return [{"type": "text", "text": f"=== DOCUMENTO: {filename} - Erro: {str(e)} ==="}]
+    prompt = f"""Você atuará como Auditor Técnico de Segurança do Trabalho, com base na legislação brasileira (NR-01, NR-07, NR-06) e boas práticas de Sistema de Gestão (ex.: ISO 45001).
+
+REGRAS OBRIGATÓRIAS:
+- Basear-se EXCLUSIVAMENTE no documento enviado
+- NÃO presumir informações ausentes
+- Análise crítica (não apenas descritiva)
+- Para cada etapa: Status (✅ APROVADO | ❌ REPROVADO), Evidência (o que foi encontrado), Análise Técnica (avaliação crítica)
+
+DADOS DA EMPRESA:
+- Razão Social: {dados_empresa.get('razaoSocial', 'Não informado')}
+- CNPJ: {dados_empresa.get('cnpj', 'Não informado')}
+- Responsável: {dados_empresa.get('responsavel', 'Não informado')}
+- E-mail: {dados_empresa.get('email', 'Não informado')}
+
+DOCUMENTOS RECEBIDOS PARA ANÁLISE:
+"""
+
+    if "pgr" in documentos_texto and documentos_texto["pgr"]:
+        prompt += f"\n--- CONTEÚDO DO PGR ---\n{documentos_texto['pgr'][:15000]}\n"
+    elif "pgr" in documentos_imagens and documentos_imagens["pgr"]:
+        prompt += "\n[PGR enviado como documento escaneado — analise as imagens anexadas]\n"
+
+    if "pcmso" in documentos_texto and documentos_texto["pcmso"]:
+        prompt += f"\n--- CONTEÚDO DO PCMSO ---\n{documentos_texto['pcmso'][:15000]}\n"
+    elif "pcmso" in documentos_imagens and documentos_imagens["pcmso"]:
+        prompt += "\n[PCMSO enviado como documento escaneado — analise as imagens anexadas]\n"
+
+    if colaboradores:
+        prompt += "\n--- COLABORADORES E ASOs ---\n"
+        for i, colab in enumerate(colaboradores):
+            nome = colab.get("nome", f"Colaborador {i+1}")
+            cargo = colab.get("cargo", "Não informado")
+            prompt += f"\nColaborador {i+1}: {nome} | Cargo: {cargo}\n"
+            if f"aso_{i}" in documentos_texto and documentos_texto[f"aso_{i}"]:
+                prompt += f"ASO: {documentos_texto[f'aso_{i}'][:8000]}\n"
+
+    prompt += """
+REALIZE A ANÁLISE COMPLETA SEGUINDO AS ETAPAS:
+
+📊 1ª ANÁLISE – PGR (se enviado):
+- Etapa 1: Dados da empresa (Razão Social e CNPJ)
+- Etapa 2: Inventário de Riscos
+- Etapa 3: Plano de Ação
+- Etapa 4: Responsável Técnico (Nome + assinatura + CREA/MTE)
+- Etapa 5: Vigência (máximo 2 anos)
+
+📊 2ª ANÁLISE – PCMSO (se enviado):
+- Etapa 6: Dados da empresa
+- Etapa 7: Médico Responsável (Nome + CRM + assinatura)
+- Etapa 8: Vigência (12 meses, com datas explícitas)
+- Etapa 9: Compatibilidade com PGR (funções)
+- Etapa 10: Compatibilidade de Riscos com PGR
+- Etapa 11: Exames Ocupacionais (tipos e periodicidade)
+
+📊 3ª ANÁLISE – ASO por colaborador (se enviado):
+- Etapa 12: Dados do trabalhador (Nome + CPF)
+- Etapa 13: Dados da empresa (Razão Social + CNPJ)
+- Etapa 14: Compatibilidade com PCMSO (função)
+- Etapa 15: Setor (coincide com PCMSO)
+- Etapa 16: Tipo de exame
+- Etapa 17: Riscos Ocupacionais (idênticos ao PCMSO)
+- Etapa 18: Data do exame (DD/MM/AAAA)
+- Etapa 19: Coerência com PCMSO
+- Etapa 20: Resultado (APTO ou INAPTO)
+- Etapa 21: Médico Responsável (Nome + CRM)
+- Etapa 22: Assinatura do trabalhador
+- Etapa 23: Assinatura do médico + CRM
+
+CONCLUSÃO: Apresente uma tabela com o resumo de todas as etapas analisadas (aprovadas e reprovadas), identificando o colaborador quando aplicável.
+
+Ao final, gere um e-mail formal em português com o resultado para enviar ao fornecedor.
+
+Retorne a resposta em JSON com esta estrutura:
+{
+  "status_geral": "APROVADO" | "REPROVADO" | "PARCIALMENTE APROVADO",
+  "analises": [
+    {
+      "documento": "PGR" | "PCMSO" | "ASO - [Nome do colaborador]",
+      "status": "APROVADO" | "REPROVADO",
+      "etapas": [
+        {
+          "numero": 1,
+          "nome": "Dados da empresa",
+          "status": "✅ APROVADO" | "❌ REPROVADO",
+          "evidencia": "...",
+          "analise_tecnica": "..."
+        }
+      ]
+    }
+  ],
+  "pendencias": ["..."],
+  "recomendacoes": ["..."],
+  "email_resposta": "..."
+}
+"""
+    return prompt
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "message": "Backend SST funcionando"})
 
 
 @app.route("/analisar", methods=["POST", "OPTIONS"])
 def analisar():
+    if request.method == "OPTIONS":
+        return jsonify({"ok": True}), 200
+
     try:
-        razao       = request.form.get("razao", "")
-        cnpj        = request.form.get("cnpj", "")
-        email       = request.form.get("email", "")
-        responsavel = request.form.get("responsavel", "")
-        atividade   = request.form.get("atividade", "")
-        colabs      = json.loads(request.form.get("colabs", "[]"))
+        # Dados da empresa
+        dados_empresa = {
+            "razaoSocial": request.form.get("razaoSocial", ""),
+            "cnpj": request.form.get("cnpj", ""),
+            "responsavel": request.form.get("responsavel", ""),
+            "email": request.form.get("email", ""),
+        }
 
-        has_pgr = "pgr" in request.files
-        has_pcmso = "pcmso" in request.files
+        # Colaboradores
+        colaboradores_json = request.form.get("colaboradores", "[]")
+        try:
+            colaboradores = json.loads(colaboradores_json)
+        except Exception:
+            colaboradores = []
 
-        colab_list = "\n".join([
-            f"  {i+1}. Nome: {c.get('name','Sem nome')} | Cargo: {c.get('cargo','nao informado')}"
-            for i, c in enumerate(colabs)
-        ]) or "  Nenhum"
+        documentos_texto = {}
+        documentos_imagens = {}
+        content_blocks = []
 
-        content = []
-        content.append({"type": "text", "text": f"""{TIN_PROMPT}
+        # Processar PGR
+        if "pgr" in request.files:
+            arquivo = request.files["pgr"]
+            bytes_pdf = arquivo.read()
+            texto, imagens = extrair_conteudo_pdf(bytes_pdf)
+            if texto:
+                documentos_texto["pgr"] = texto
+            elif imagens:
+                documentos_imagens["pgr"] = imagens
+                for img_b64 in imagens[:5]:
+                    content_blocks.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}
+                    })
 
-DADOS DO FORNECEDOR:
-Empresa: {razao} | CNPJ: {cnpj or 'Nao informado'} | Responsavel: {responsavel or 'Nao informado'} | Atividade: {atividade or 'Nao informada'} | E-mail: {email}
-Colaboradores ({len(colabs)}): {colab_list}
+        # Processar PCMSO
+        if "pcmso" in request.files:
+            arquivo = request.files["pcmso"]
+            bytes_pdf = arquivo.read()
+            texto, imagens = extrair_conteudo_pdf(bytes_pdf)
+            if texto:
+                documentos_texto["pcmso"] = texto
+            elif imagens:
+                documentos_imagens["pcmso"] = imagens
+                for img_b64 in imagens[:5]:
+                    content_blocks.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}
+                    })
 
-A seguir estao os documentos para analise:"""})
+        # Processar ASOs dos colaboradores
+        for i, colab in enumerate(colaboradores):
+            chave = f"aso_{i}"
+            if chave in request.files:
+                arquivo = request.files[chave]
+                bytes_pdf = arquivo.read()
+                texto, imagens = extrair_conteudo_pdf(bytes_pdf)
+                if texto:
+                    documentos_texto[chave] = texto
+                elif imagens:
+                    documentos_imagens[chave] = imagens
+                    for img_b64 in imagens[:3]:
+                        content_blocks.append({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}
+                        })
 
-        for doc_key in ["pgr", "pcmso"]:
-            if doc_key in request.files:
-                f = request.files[doc_key]
-                content.extend(extract_pdf_content(f.read(), f.filename))
-
-        for i, colab in enumerate(colabs):
-            for doc_type in ["aso", "os", "epi", "trein"]:
-                field_name = f"colab_{i}_{doc_type}"
-                if field_name in request.files:
-                    f = request.files[field_name]
-                    label = {"aso":"ASO","os":"Ordem de Servico","epi":"Ficha de EPI","trein":"Treinamento"}[doc_type]
-                    content.extend(extract_pdf_content(f.read(), f"{colab.get('name','Colaborador')} - {label}"))
-
-        pgr_schema = '''"pgr":{"status":"ok|pendente|reprovado|ausente","validade":"DD/MM/AAAA ou N/A","obs":"string","etapas":[{"num":1,"nome":"Dados da empresa","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"trecho real","analise":"avaliacao"},{"num":2,"nome":"Inventario de Riscos","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":3,"nome":"Plano de Acao","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":4,"nome":"Responsavel Tecnico","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":5,"nome":"Vigencia","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"}]}''' if has_pgr else '''"pgr":{"status":"ausente","validade":"N/A","obs":"Documento nao enviado","etapas":[]}'''
-
-        pcmso_schema = '''"pcmso":{"status":"ok|pendente|reprovado|ausente","validade":"DD/MM/AAAA ou N/A","obs":"string","etapas":[{"num":6,"nome":"Dados da empresa","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":7,"nome":"Medico Responsavel","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":8,"nome":"Vigencia","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":9,"nome":"Compatibilidade com PGR","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":10,"nome":"Compatibilidade de Riscos","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":11,"nome":"Exames Ocupacionais","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"}]}''' if has_pcmso else '''"pcmso":{"status":"ausente","validade":"N/A","obs":"Documento nao enviado","etapas":[]}'''
-
-        colab_schema = '''"colaboradores":[{"nome":"string","cargo":"string","status":"ok|pendente|reprovado","aso":{"status":"ok|pendente|ausente","validade":"DD/MM/AAAA ou N/A"},"os":{"status":"ok|pendente|ausente"},"epi":{"status":"ok|pendente|ausente"},"trein":{"status":"ok|pendente|ausente"},"etapas_aso":[{"num":12,"nome":"Dados do trabalhador","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":13,"nome":"Dados da empresa","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":14,"nome":"Compatibilidade com PCMSO","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":15,"nome":"Setor","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":16,"nome":"Tipo de exame","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":17,"nome":"Riscos Ocupacionais","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":18,"nome":"Data do exame","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":19,"nome":"Coerencia com PCMSO","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":20,"nome":"Resultado","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":21,"nome":"Medico Responsavel","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":22,"nome":"Assinatura do trabalhador","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"},{"num":23,"nome":"Assinatura do medico","status":"APROVADO|REPROVADO|AUSENTE","evidencia":"string","analise":"string"}]}]''' if colabs else '"colaboradores":[]'
-
-        schema = f'{{"status_geral":"aprovado|pendente|reprovado","empresa":{{{pgr_schema},{pcmso_schema}}},{colab_schema},"pendencias":["string"],"recomendacoes":["string"],"email_resposta":"e-mail formal completo em portugues"}}'
-
-        content.append({"type": "text", "text": f"\nRetorne SOMENTE este JSON valido, sem texto adicional:\n{schema}"})
-
-        response = get_client().messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4000,
-            messages=[{"role": "user", "content": content}]
+        # Montar prompt
+        prompt_texto = montar_prompt(
+            dados_empresa, colaboradores, documentos_texto, documentos_imagens
         )
 
-        text = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        text = text.strip()
+        # Montar mensagem para Claude
+        content_blocks.append({"type": "text", "text": prompt_texto})
 
-        result = json.loads(text)
-        return jsonify({"success": True, "result": result})
+        # Chamar API Claude
+        client = get_client()
+        response = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=8000,
+            messages=[{"role": "user", "content": content_blocks}]
+        )
+
+        texto_resposta = response.content[0].text
+
+        # Tentar extrair JSON da resposta
+        try:
+            inicio = texto_resposta.find("{")
+            fim = texto_resposta.rfind("}") + 1
+            if inicio >= 0 and fim > inicio:
+                resultado = json.loads(texto_resposta[inicio:fim])
+            else:
+                resultado = {"status_geral": "ERRO", "resposta_bruta": texto_resposta}
+        except Exception:
+            resultado = {"status_geral": "ERRO", "resposta_bruta": texto_resposta}
+
+        return jsonify(resultado)
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e), "status_geral": "ERRO"}), 500
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
