@@ -4,23 +4,21 @@ import json
 import fitz  # PyMuPDF
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import google.generativeai as genai
+from google import genai
 
 app = Flask(__name__)
 CORS(app, origins="*", allow_headers="*", methods=["GET", "POST", "OPTIONS"])
 
-_model = None
+_client = None
 
-def get_model():
-    global _model
-    if _model is None:
-        genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-        _model = genai.GenerativeModel("gemini-1.5-flash-8b")
-    return _model
+def get_client():
+    global _client
+    if _client is None:
+        _client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    return _client
 
 
 def extrair_conteudo_pdf(file_bytes):
-    """Extrai texto ou imagens de um PDF."""
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     texto_total = ""
     imagens = []
@@ -29,7 +27,6 @@ def extrair_conteudo_pdf(file_bytes):
         texto = page.get_text()
         texto_total += texto
 
-    # Se o PDF tem pouco texto, é escaneado — extrair como imagens
     if len(texto_total.strip()) < 100:
         for page in doc:
             pix = page.get_pixmap(dpi=150)
@@ -42,8 +39,6 @@ def extrair_conteudo_pdf(file_bytes):
 
 
 def montar_prompt(dados_empresa, colaboradores, documentos_texto, documentos_imagens):
-    """Monta o prompt completo com o TIN integrado."""
-
     prompt = f"""Você atuará como Auditor Técnico de Segurança do Trabalho, com base na legislação brasileira (NR-01, NR-07, NR-06) e boas práticas de Sistema de Gestão (ex.: ISO 45001).
 
 REGRAS OBRIGATÓRIAS:
@@ -63,12 +58,12 @@ DOCUMENTOS RECEBIDOS PARA ANÁLISE:
 
     if "pgr" in documentos_texto and documentos_texto["pgr"]:
         prompt += f"\n--- CONTEÚDO DO PGR ---\n{documentos_texto['pgr'][:15000]}\n"
-    elif "pgr" in documentos_imagens and documentos_imagens["pgr"]:
+    elif "pgr" in documentos_imagens:
         prompt += "\n[PGR enviado como documento escaneado]\n"
 
     if "pcmso" in documentos_texto and documentos_texto["pcmso"]:
         prompt += f"\n--- CONTEÚDO DO PCMSO ---\n{documentos_texto['pcmso'][:15000]}\n"
-    elif "pcmso" in documentos_imagens and documentos_imagens["pcmso"]:
+    elif "pcmso" in documentos_imagens:
         prompt += "\n[PCMSO enviado como documento escaneado]\n"
 
     if colaboradores:
@@ -112,11 +107,11 @@ REALIZE A ANÁLISE COMPLETA SEGUINDO AS ETAPAS:
 - Etapa 22: Assinatura do trabalhador
 - Etapa 23: Assinatura do médico + CRM
 
-CONCLUSÃO: Apresente uma tabela com o resumo de todas as etapas analisadas (aprovadas e reprovadas), identificando o colaborador quando aplicável.
+CONCLUSÃO: Apresente uma tabela com o resumo de todas as etapas analisadas.
 
 Ao final, gere um e-mail formal em português com o resultado para enviar ao fornecedor.
 
-Retorne a resposta APENAS em JSON válido com esta estrutura (sem markdown, sem ```json):
+Retorne a resposta APENAS em JSON válido (sem markdown, sem ```json):
 {
   "status_geral": "APROVADO",
   "analises": [
@@ -180,12 +175,7 @@ def analisar():
             elif imagens:
                 documentos_imagens["pgr"] = imagens
                 for img_b64 in imagens[:5]:
-                    parts.append({
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": img_b64
-                        }
-                    })
+                    parts.append({"mime_type": "image/jpeg", "data": base64.b64decode(img_b64)})
 
         # Processar PCMSO
         if "pcmso" in request.files:
@@ -197,12 +187,7 @@ def analisar():
             elif imagens:
                 documentos_imagens["pcmso"] = imagens
                 for img_b64 in imagens[:5]:
-                    parts.append({
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": img_b64
-                        }
-                    })
+                    parts.append({"mime_type": "image/jpeg", "data": base64.b64decode(img_b64)})
 
         # Processar ASOs
         for i, colab in enumerate(colaboradores):
@@ -216,24 +201,18 @@ def analisar():
                 elif imagens:
                     documentos_imagens[chave] = imagens
                     for img_b64 in imagens[:3]:
-                        parts.append({
-                            "inline_data": {
-                                "mime_type": "image/jpeg",
-                                "data": img_b64
-                            }
-                        })
+                        parts.append({"mime_type": "image/jpeg", "data": base64.b64decode(img_b64)})
 
-        prompt_texto = montar_prompt(
-            dados_empresa, colaboradores, documentos_texto, documentos_imagens
-        )
-
+        prompt_texto = montar_prompt(dados_empresa, colaboradores, documentos_texto, documentos_imagens)
         parts.append(prompt_texto)
 
-        model = get_model()
-        response = model.generate_content(parts)
+        client = get_client()
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=parts
+        )
         texto_resposta = response.text
 
-        # Extrair JSON da resposta
         try:
             inicio = texto_resposta.find("{")
             fim = texto_resposta.rfind("}") + 1
