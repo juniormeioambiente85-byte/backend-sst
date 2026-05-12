@@ -4,7 +4,7 @@ import json
 import fitz  # PyMuPDF
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from google import genai
+from openai import OpenAI
 
 app = Flask(__name__)
 CORS(app, origins="*", allow_headers="*", methods=["GET", "POST", "OPTIONS"])
@@ -14,10 +14,7 @@ _client = None
 def get_client():
     global _client
     if _client is None:
-        _client = genai.Client(
-    api_key=os.environ.get("GEMINI_API_KEY"),
-    http_options={"api_version": "v1"}
-)
+        _client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
     return _client
 
 
@@ -79,70 +76,21 @@ DOCUMENTOS RECEBIDOS PARA ANÁLISE:
                 prompt += f"ASO: {documentos_texto[f'aso_{i}'][:8000]}\n"
 
     prompt += """
-REALIZE A ANÁLISE COMPLETA SEGUINDO AS ETAPAS:
+ANALISE apenas os documentos enviados. Para cada etapa: status (✅ APROVADO|❌ REPROVADO), evidência encontrada e análise técnica objetiva.
 
-📊 1ª ANÁLISE – PGR (se enviado):
-- Etapa 1: Dados da empresa (Razão Social e CNPJ)
-- Etapa 2: Inventário de Riscos
-- Etapa 3: Plano de Ação
-- Etapa 4: Responsável Técnico (Nome + assinatura + CREA/MTE)
-- Etapa 5: Vigência (máximo 2 anos)
+PGR (etapas 1-5): 1-Razão Social/CNPJ 2-Inventário de Riscos 3-Plano de Ação 4-Responsável Técnico+CREA/MTE 5-Vigência(máx 2 anos)
+PCMSO (etapas 6-11): 6-Dados empresa 7-Médico+CRM+assinatura 8-Vigência 12 meses 9-Compatibilidade funções c/PGR 10-Riscos idênticos ao PGR 11-Exames e periodicidade
+ASO por colaborador (etapas 12-23): 12-Nome+CPF 13-Empresa+CNPJ 14-Função no PCMSO 15-Setor 16-Tipo exame 17-Riscos=PCMSO 18-Data(DD/MM/AAAA) 19-Coerência PCMSO 20-APTO/INAPTO 21-Médico+CRM 22-Assinatura trabalhador 23-Assinatura médico+CRM
 
-📊 2ª ANÁLISE – PCMSO (se enviado):
-- Etapa 6: Dados da empresa
-- Etapa 7: Médico Responsável (Nome + CRM + assinatura)
-- Etapa 8: Vigência (12 meses, com datas explícitas)
-- Etapa 9: Compatibilidade com PGR (funções)
-- Etapa 10: Compatibilidade de Riscos com PGR
-- Etapa 11: Exames Ocupacionais (tipos e periodicidade)
-
-📊 3ª ANÁLISE – ASO por colaborador (se enviado):
-- Etapa 12: Dados do trabalhador (Nome + CPF)
-- Etapa 13: Dados da empresa (Razão Social + CNPJ)
-- Etapa 14: Compatibilidade com PCMSO (função)
-- Etapa 15: Setor (coincide com PCMSO)
-- Etapa 16: Tipo de exame
-- Etapa 17: Riscos Ocupacionais (idênticos ao PCMSO)
-- Etapa 18: Data do exame (DD/MM/AAAA)
-- Etapa 19: Coerência com PCMSO
-- Etapa 20: Resultado (APTO ou INAPTO)
-- Etapa 21: Médico Responsável (Nome + CRM)
-- Etapa 22: Assinatura do trabalhador
-- Etapa 23: Assinatura do médico + CRM
-
-CONCLUSÃO: Apresente uma tabela com o resumo de todas as etapas analisadas.
-
-Ao final, gere um e-mail formal em português com o resultado para enviar ao fornecedor.
-
-Retorne a resposta APENAS em JSON válido (sem markdown, sem ```json):
-{
-  "status_geral": "APROVADO",
-  "analises": [
-    {
-      "documento": "PGR",
-      "status": "APROVADO",
-      "etapas": [
-        {
-          "numero": 1,
-          "nome": "Dados da empresa",
-          "status": "✅ APROVADO",
-          "evidencia": "...",
-          "analise_tecnica": "..."
-        }
-      ]
-    }
-  ],
-  "pendencias": ["..."],
-  "recomendacoes": ["..."],
-  "email_resposta": "..."
-}
+Retorne APENAS JSON válido (sem markdown):
+{"status_geral":"APROVADO|REPROVADO|PARCIALMENTE APROVADO","analises":[{"documento":"PGR|PCMSO|ASO - [Nome]","status":"APROVADO|REPROVADO","etapas":[{"numero":1,"nome":"Dados da empresa","status":"✅ APROVADO","evidencia":"...","analise_tecnica":"..."}]}],"pendencias":["..."],"recomendacoes":["..."],"email_resposta":"..."}
 """
     return prompt
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "message": "Backend SST funcionando com Gemini"})
+    return jsonify({"status": "ok", "message": "Backend SST funcionando com OpenAI"})
 
 
 @app.route("/analisar", methods=["POST", "OPTIONS"])
@@ -166,7 +114,7 @@ def analisar():
 
         documentos_texto = {}
         documentos_imagens = {}
-        parts = []
+        content_parts = []
 
         # Processar PGR
         if "pgr" in request.files:
@@ -178,7 +126,10 @@ def analisar():
             elif imagens:
                 documentos_imagens["pgr"] = imagens
                 for img_b64 in imagens[:5]:
-                    parts.append({"mime_type": "image/jpeg", "data": base64.b64decode(img_b64)})
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                    })
 
         # Processar PCMSO
         if "pcmso" in request.files:
@@ -190,7 +141,10 @@ def analisar():
             elif imagens:
                 documentos_imagens["pcmso"] = imagens
                 for img_b64 in imagens[:5]:
-                    parts.append({"mime_type": "image/jpeg", "data": base64.b64decode(img_b64)})
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                    })
 
         # Processar ASOs
         for i, colab in enumerate(colaboradores):
@@ -204,17 +158,22 @@ def analisar():
                 elif imagens:
                     documentos_imagens[chave] = imagens
                     for img_b64 in imagens[:3]:
-                        parts.append({"mime_type": "image/jpeg", "data": base64.b64decode(img_b64)})
+                        content_parts.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                        })
 
         prompt_texto = montar_prompt(dados_empresa, colaboradores, documentos_texto, documentos_imagens)
-        parts.append(prompt_texto)
+        content_parts.append({"type": "text", "text": prompt_texto})
 
         client = get_client()
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=parts
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": content_parts}],
+            max_tokens=8000
         )
-        texto_resposta = response.text
+
+        texto_resposta = response.choices[0].message.content
 
         try:
             inicio = texto_resposta.find("{")
