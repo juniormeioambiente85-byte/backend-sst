@@ -76,14 +76,72 @@ DOCUMENTOS RECEBIDOS PARA ANÁLISE:
                 prompt += f"ASO: {documentos_texto[f'aso_{i}'][:8000]}\n"
 
     prompt += """
-ANALISE apenas os documentos enviados. Para cada etapa: status (✅ APROVADO|❌ REPROVADO), evidência encontrada e análise técnica objetiva.
+# POPAF — Prompt Operacional Padronizado para Auditoria Fiscalizatória
 
-PGR (etapas 1-5): 1-Razão Social/CNPJ 2-Inventário de Riscos 3-Plano de Ação 4-Responsável Técnico+CREA/MTE 5-Vigência(máx 2 anos)
-PCMSO (etapas 6-11): 6-Dados empresa 7-Médico+CRM+assinatura 8-Vigência 12 meses 9-Compatibilidade funções c/PGR 10-Riscos idênticos ao PGR 11-Exames e periodicidade
-ASO por colaborador (etapas 12-23): 12-Nome+CPF 13-Empresa+CNPJ 14-Função no PCMSO 15-Setor 16-Tipo exame 17-Riscos=PCMSO 18-Data(DD/MM/AAAA) 19-Coerência PCMSO 20-APTO/INAPTO 21-Médico+CRM 22-Assinatura trabalhador 23-Assinatura médico+CRM
+## PAPEL
+Auditor Técnico de Segurança do Trabalho especializado em auditoria documental, com base em NR-01, NR-06, NR-07 e ISO 45001.
+Atuação: técnica, objetiva, crítica, fiel ao documento, SEM inferências ou suposições.
 
-Retorne APENAS JSON válido (sem markdown):
-{"status_geral":"APROVADO|REPROVADO|PARCIALMENTE APROVADO","analises":[{"documento":"PGR|PCMSO|ASO - [Nome]","status":"APROVADO|REPROVADO","etapas":[{"numero":1,"nome":"Dados da empresa","status":"✅ APROVADO","evidencia":"...","analise_tecnica":"..."}]}],"pendencias":["..."],"recomendacoes":["..."],"email_resposta":"..."}
+## REGRAS OBRIGATÓRIAS
+1. Basear-se EXCLUSIVAMENTE no documento enviado. PROIBIDO presumir, completar ou inferir dados ausentes.
+2. Análise crítica obrigatória: avaliar coerência, consistência, conformidade normativa e divergências.
+3. Para cada etapa responder: Status (✅ APROVADO | ❌ REPROVADO), Evidência (o que foi encontrado), Análise Técnica (avaliação crítica).
+4. APROVADO: todas as verificações conformes. REPROVADO: qualquer não conformidade.
+
+## MATRIZ DE AUDITORIA
+
+PGR (se enviado):
+- Etapa 1: Razão Social e CNPJ
+- Etapa 2: Inventário de Perigos e Riscos
+- Etapa 3: Plano de Ação
+- Etapa 4: Responsável Técnico (nome + assinatura + CREA/MTE + tipo assinatura)
+- Etapa 5: Vigência definida (máx 2 anos)
+
+PCMSO (se enviado):
+- Etapa 6: Razão Social e CNPJ
+- Etapa 7: Médico Responsável (nome + CRM + assinatura digital/manual)
+- Etapa 8: Vigência 12 meses (data início e fim explícitas)
+- Etapa 9: Compatibilidade funções com PGR
+- Etapa 10: Riscos idênticos ao PGR
+- Etapa 11: Exames ocupacionais (admissional, periódico, retorno, mudança de função + periodicidade)
+
+ASO por colaborador (se enviado):
+- Etapa 12: Nome completo + CPF do trabalhador
+- Etapa 13: Razão Social + CNPJ da empresa
+- Etapa 14: Função presente no PCMSO
+- Etapa 15: Setor compatível com PCMSO
+- Etapa 16: Tipo de exame (admissional/periódico/retorno/mudança de função/demissional)
+- Etapa 17: Riscos idênticos ao PCMSO
+- Etapa 18: Data do exame (DD/MM/AAAA)
+- Etapa 19: Coerência com planejamento do PCMSO
+- Etapa 20: Resultado (APTO ou INAPTO)
+- Etapa 21: Médico Responsável (nome + CRM)
+- Etapa 22: Assinatura do trabalhador (GOV, digital ou manual)
+- Etapa 23: Assinatura do médico + CRM associado
+
+## FORMATO DE ENTREGA
+Analise todos os documentos enviados e retorne APENAS JSON válido (sem markdown, sem ```json):
+{
+  "status_geral": "APROVADO|REPROVADO|PARCIALMENTE APROVADO",
+  "analises": [
+    {
+      "documento": "PGR|PCMSO|ASO - [Nome do Colaborador]",
+      "status": "APROVADO|REPROVADO",
+      "etapas": [
+        {
+          "numero": 1,
+          "nome": "Dados da empresa",
+          "status": "✅ APROVADO",
+          "evidencia": "descrição objetiva do encontrado",
+          "analise_tecnica": "avaliação crítica de conformidade"
+        }
+      ]
+    }
+  ],
+  "pendencias": ["lista de não conformidades"],
+  "recomendacoes": ["ações corretivas sugeridas"],
+  "email_resposta": "e-mail formal em português para enviar ao fornecedor com o resultado"
+}
 """
     return prompt
 
