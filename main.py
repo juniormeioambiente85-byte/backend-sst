@@ -44,7 +44,7 @@ def enviar_email(destinatario, razao_social, corpo_email):
         parte_html = MIMEText(corpo_html, "html", "utf-8")
         msg.attach(parte_html)
 
-        with smtplib.SMTP("smtp-mail.outlook.com", 587) as server:
+        with smtplib.SMTP("smtp-mail.outlook.com", 587, timeout=10) as server:
             server.ehlo()
             server.starttls()
             server.ehlo()
