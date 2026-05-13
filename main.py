@@ -98,14 +98,14 @@ DOCUMENTOS RECEBIDOS PARA ANÁLISE:
 """
 
     if "pgr" in documentos_texto and documentos_texto["pgr"]:
-        prompt += f"\n--- CONTEÚDO DO PGR ---\n{documentos_texto['pgr'][:15000]}\n"
+        prompt += f"\n--- CONTEÚDO COMPLETO DO PGR ---\n{documentos_texto['pgr'][:60000]}\n--- FIM DO PGR ---\n"
     elif "pgr" in documentos_imagens:
-        prompt += "\n[PGR enviado como documento escaneado]\n"
+        prompt += "\n[PGR enviado como documento escaneado — analisar imagens anexadas]\n"
 
     if "pcmso" in documentos_texto and documentos_texto["pcmso"]:
-        prompt += f"\n--- CONTEÚDO DO PCMSO ---\n{documentos_texto['pcmso'][:15000]}\n"
+        prompt += f"\n--- CONTEÚDO COMPLETO DO PCMSO ---\n{documentos_texto['pcmso'][:60000]}\n--- FIM DO PCMSO ---\n"
     elif "pcmso" in documentos_imagens:
-        prompt += "\n[PCMSO enviado como documento escaneado]\n"
+        prompt += "\n[PCMSO enviado como documento escaneado — analisar imagens anexadas]\n"
 
     if colaboradores:
         prompt += "\n--- COLABORADORES E ASOs ---\n"
@@ -114,7 +114,7 @@ DOCUMENTOS RECEBIDOS PARA ANÁLISE:
             cargo = colab.get("cargo", "Não informado")
             prompt += f"\nColaborador {i+1}: {nome} | Cargo: {cargo}\n"
             if f"aso_{i}" in documentos_texto and documentos_texto[f"aso_{i}"]:
-                prompt += f"ASO: {documentos_texto[f'aso_{i}'][:8000]}\n"
+                prompt += f"--- CONTEÚDO COMPLETO DO ASO ---\n{documentos_texto[f'aso_{i}'][:20000]}\n--- FIM DO ASO ---\n"
 
     prompt += """
 # POPAF — Prompt Operacional Padronizado para Auditoria Fiscalizatória
@@ -125,9 +125,13 @@ Atuação: técnica, objetiva, crítica, fiel ao documento, SEM inferências ou 
 
 ## REGRAS OBRIGATÓRIAS
 1. Basear-se EXCLUSIVAMENTE no documento enviado. PROIBIDO presumir, completar ou inferir dados ausentes.
-2. Análise crítica obrigatória: avaliar coerência, consistência, conformidade normativa e divergências.
-3. Para cada etapa responder: Status (✅ APROVADO | ❌ REPROVADO), Evidência (o que foi encontrado), Análise Técnica (avaliação crítica).
-4. APROVADO: todas as verificações conformes. REPROVADO: qualquer não conformidade.
+2. **LEIA O DOCUMENTO INTEIRO COM ATENÇÃO** antes de avaliar cada etapa. Faça uma varredura COMPLETA do conteúdo: capa, índice, corpo, tabelas, rodapés, cabeçalhos, anexos, apêndices, página de assinaturas. NÃO marque como REPROVADO sem ter feito uma busca exaustiva pelo documento inteiro.
+3. **CITE O QUE LEU**: Para cada etapa, a evidência deve conter o TRECHO LITERAL encontrado no documento (copie a frase exata entre aspas). Se a informação aparecer em múltiplas seções, cite todas.
+4. Análise crítica obrigatória: avaliar coerência, consistência, conformidade normativa e divergências com base no que foi efetivamente lido no documento.
+5. Para cada etapa responder: Status (✅ APROVADO | ❌ REPROVADO), Evidência (trecho literal + onde foi encontrado no documento), Análise Técnica (avaliação crítica do conteúdo lido).
+6. **APROVADO**: a informação está presente no documento (mesmo que em seções diferentes — capa, anexo, rodapé, etc).
+7. **REPROVADO**: SOMENTE se você buscou exaustivamente em todas as seções e a informação realmente NÃO consta no documento, OU está em desacordo com a norma.
+8. Em caso de dúvida sobre presença/ausência: classificar como APROVADO e detalhar a evidência encontrada. NUNCA reprovar por hipótese ou suposição.
 
 ## MATRIZ DE AUDITORIA
 
@@ -173,8 +177,8 @@ Analise todos os documentos enviados e retorne APENAS JSON válido (sem markdown
           "numero": 1,
           "nome": "Dados da empresa",
           "status": "✅ APROVADO",
-          "evidencia": "descrição objetiva do encontrado",
-          "analise_tecnica": "avaliação crítica de conformidade"
+          "evidencia": "trecho literal copiado do documento + onde foi encontrado",
+          "analise_tecnica": "avaliação crítica de conformidade fundamentada no que foi lido"
         }
       ]
     }
@@ -267,9 +271,10 @@ def analisar():
 
         client = get_client()
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[{"role": "user", "content": content_parts}],
-            max_tokens=8000
+            max_tokens=12000,
+            temperature=0.2
         )
 
         texto_resposta = response.choices[0].message.content
