@@ -98,12 +98,12 @@ DOCUMENTOS RECEBIDOS PARA ANÁLISE:
 """
 
     if "pgr" in documentos_texto and documentos_texto["pgr"]:
-        prompt += f"\n--- CONTEÚDO COMPLETO DO PGR ---\n{documentos_texto['pgr'][:60000]}\n--- FIM DO PGR ---\n"
+        prompt += f"\n--- CONTEÚDO COMPLETO DO PGR ---\n{documentos_texto['pgr'][:30000]}\n--- FIM DO PGR ---\n"
     elif "pgr" in documentos_imagens:
         prompt += "\n[PGR enviado como documento escaneado — analisar imagens anexadas]\n"
 
     if "pcmso" in documentos_texto and documentos_texto["pcmso"]:
-        prompt += f"\n--- CONTEÚDO COMPLETO DO PCMSO ---\n{documentos_texto['pcmso'][:60000]}\n--- FIM DO PCMSO ---\n"
+        prompt += f"\n--- CONTEÚDO COMPLETO DO PCMSO ---\n{documentos_texto['pcmso'][:30000]}\n--- FIM DO PCMSO ---\n"
     elif "pcmso" in documentos_imagens:
         prompt += "\n[PCMSO enviado como documento escaneado — analisar imagens anexadas]\n"
 
@@ -114,7 +114,7 @@ DOCUMENTOS RECEBIDOS PARA ANÁLISE:
             cargo = colab.get("cargo", "Não informado")
             prompt += f"\nColaborador {i+1}: {nome} | Cargo: {cargo}\n"
             if f"aso_{i}" in documentos_texto and documentos_texto[f"aso_{i}"]:
-                prompt += f"--- CONTEÚDO COMPLETO DO ASO ---\n{documentos_texto[f'aso_{i}'][:20000]}\n--- FIM DO ASO ---\n"
+                prompt += f"--- CONTEÚDO COMPLETO DO ASO ---\n{documentos_texto[f'aso_{i}'][:10000]}\n--- FIM DO ASO ---\n"
 
     prompt += """
 # POPAF — Prompt Operacional Padronizado para Auditoria Fiscalizatória
@@ -273,7 +273,7 @@ def analisar():
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": content_parts}],
-            max_tokens=12000,
+            max_tokens=6000,
             temperature=0.2
         )
 
