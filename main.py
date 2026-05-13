@@ -1,7 +1,10 @@
 import os
 import base64
 import json
+import smtplib
 import fitz  # PyMuPDF
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from openai import OpenAI
@@ -16,6 +19,44 @@ def get_client():
     if _client is None:
         _client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
     return _client
+
+
+def enviar_email(destinatario, razao_social, corpo_email):
+    remetente = os.environ.get("EMAIL_SENDER")
+    senha = os.environ.get("EMAIL_PASSWORD")
+
+    if not remetente or not senha:
+        print("EMAIL_SENDER ou EMAIL_PASSWORD não configurados — e-mail não enviado.")
+        return False
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"Resultado da Análise SST — {razao_social}"
+        msg["From"] = remetente
+        msg["To"] = destinatario
+
+        # Corpo em texto simples
+        parte_texto = MIMEText(corpo_email, "plain", "utf-8")
+        msg.attach(parte_texto)
+
+        # Corpo em HTML (formata quebras de linha)
+        corpo_html = "<html><body><pre style='font-family:Arial,sans-serif;font-size:14px;white-space:pre-wrap'>" + corpo_email.replace("<", "&lt;").replace(">", "&gt;") + "</pre></body></html>"
+        parte_html = MIMEText(corpo_html, "html", "utf-8")
+        msg.attach(parte_html)
+
+        with smtplib.SMTP("smtp-mail.outlook.com", 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(remetente, senha)
+            server.sendmail(remetente, destinatario, msg.as_string())
+
+        print(f"E-mail enviado com sucesso para {destinatario}")
+        return True
+
+    except Exception as e:
+        print(f"Erro ao enviar e-mail: {e}")
+        return False
 
 
 def extrair_conteudo_pdf(file_bytes):
@@ -234,14 +275,32 @@ def analisar():
         texto_resposta = response.choices[0].message.content
 
         try:
-            inicio = texto_resposta.find("{")
-            fim = texto_resposta.rfind("}") + 1
+            # Remover markdown se presente
+            texto_limpo = texto_resposta.strip()
+            if "```json" in texto_limpo:
+                texto_limpo = texto_limpo.split("```json")[1].split("```")[0].strip()
+            elif "```" in texto_limpo:
+                texto_limpo = texto_limpo.split("```")[1].split("```")[0].strip()
+
+            inicio = texto_limpo.find("{")
+            fim = texto_limpo.rfind("}") + 1
             if inicio >= 0 and fim > inicio:
-                resultado = json.loads(texto_resposta[inicio:fim])
+                resultado = json.loads(texto_limpo[inicio:fim])
             else:
                 resultado = {"status_geral": "ERRO", "resposta_bruta": texto_resposta}
         except Exception:
             resultado = {"status_geral": "ERRO", "resposta_bruta": texto_resposta}
+
+        # Enviar e-mail ao fornecedor se houver email_resposta
+        email_destino = dados_empresa.get("email", "")
+        email_corpo = resultado.get("email_resposta", "")
+        razao = dados_empresa.get("razaoSocial", "Fornecedor")
+
+        if email_destino and email_corpo:
+            enviado = enviar_email(email_destino, razao, email_corpo)
+            resultado["email_enviado"] = enviado
+        else:
+            resultado["email_enviado"] = False
 
         return jsonify(resultado)
 
